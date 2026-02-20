@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . /app
 
-RUN echo "copied to small chnage"
+RUN echo "copied to  chnage"
 
 RUN pip install -r requirements.txt
 
