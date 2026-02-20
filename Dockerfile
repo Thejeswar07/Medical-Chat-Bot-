@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . /app
 
-RUN echo "copied to /app"
+RUN echo "copied to /apdihgidfhip"
 
 RUN pip install -r requirements.txt
 
