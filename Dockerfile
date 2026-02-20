@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . /app
 
-RUN echo "copied tbldkbjjbchnage"
+RUN echo "copied tbjbjbchnage"
 
 RUN pip install -r requirements.txt
 
