@@ -42,7 +42,7 @@ jobs:
           echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
 
- Continuous-Deployment:
+  Continuous-Deployment:
     needs: Continuous-Integration
     runs-on: self-hosted
     steps:
