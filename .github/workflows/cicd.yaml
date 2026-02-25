@@ -1,11 +1,15 @@
-name: Deploy Application Docker Image to EC2 instance
+name: Deploy Application to EC2 via ECR
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
 
+  # -------------------------------
+  # 🚀 CONTINUOUS INTEGRATION (BUILD + PUSH)
+  # -------------------------------
   Continuous-Integration:
     runs-on: ubuntu-latest
 
@@ -13,10 +17,10 @@ jobs:
       image_uri: ${{ steps.build-image.outputs.image_uri }}
 
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -27,7 +31,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to Amazon ECR
+      - name: Build, Tag and Push Docker Image
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -35,10 +39,16 @@ jobs:
           IMAGE_TAG: latest
         run: |
           IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "Building Docker image..."
           docker build -t $IMAGE_URI .
+          echo "Pushing Docker image..."
           docker push $IMAGE_URI
           echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
+
+  # -------------------------------
+  # 🚀 CONTINUOUS DEPLOYMENT (SSH → EC2)
+  # -------------------------------
   Continuous-Deployment:
     needs: Continuous-Integration
     runs-on: ubuntu-latest
@@ -48,30 +58,56 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
+          username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
           script: |
 
-            echo "Logging into ECR..."
+            echo "===== CHECKING AWS CLI ====="
+            if ! command -v aws &> /dev/null
+            then
+              echo "Installing AWS CLI..."
+              sudo apt update
+              sudo apt install unzip curl -y
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip -o awscliv2.zip
+              sudo ./aws/install
+            else
+              echo "AWS CLI already installed"
+            fi
+
+            echo "===== CHECKING DOCKER ====="
+            if ! command -v docker &> /dev/null
+            then
+              echo "Installing Docker..."
+              sudo apt install docker.io -y
+              sudo systemctl start docker
+              sudo systemctl enable docker
+            else
+              echo "Docker already installed"
+            fi
+
+            IMAGE_URI="${{ needs.Continuous-Integration.outputs.image_uri }}"
+            ECR_REGISTRY=$(echo $IMAGE_URI | cut -d'/' -f1)
+
+            echo "===== LOGGING INTO ECR ====="
             aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | \
-            docker login --username AWS --password-stdin ${{ needs.Continuous-Integration.outputs.image_uri }}
+            docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            echo "Pulling latest image..."
-            docker pull ${{ needs.Continuous-Integration.outputs.image_uri }}
+            echo "===== PULLING LATEST IMAGE ====="
+            docker pull $IMAGE_URI
 
-            echo "Stopping old container..."
+            echo "===== STOPPING OLD CONTAINER ====="
             docker stop app-container || true
             docker rm app-container || true
 
-            echo "Running new container..."
+            echo "===== RUNNING NEW CONTAINER ====="
             docker run -d \
               --name app-container \
-              -p 8080:8080 \
-              -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
-              -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-              -e AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" \
+              -p 80:8080 \
               -e PINECONE_API_KEY="${{ secrets.PINECONE_API_KEY }}" \
               -e GOOGLE_API_KEY="${{ secrets.GOOGLE_API_KEY }}" \
-              ${{ needs.Continuous-Integration.outputs.image_uri }}
+              $IMAGE_URI
 
+            echo "===== RUNNING CONTAINERS ====="
             docker ps
