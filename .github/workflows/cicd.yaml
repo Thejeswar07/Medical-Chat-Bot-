@@ -92,7 +92,7 @@ jobs:
               --name app-container \
               -p 80:8080 \
               -e PINECONE_API_KEY="${{ secrets.PINECONE_API_KEY }}" \
-              -e GOOGLE_API_KEY="${{ secrets.GOOGLE_API_KEY }}" \
+              -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
               $IMAGE_URI
 
             docker ps
