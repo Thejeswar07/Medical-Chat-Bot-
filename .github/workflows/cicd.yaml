@@ -7,14 +7,14 @@ on:
 
 jobs:
 
-  # -------------------------------
+  # ==========================================
   # 🚀 CONTINUOUS INTEGRATION (BUILD + PUSH)
-  # -------------------------------
+  # ==========================================
   Continuous-Integration:
     runs-on: ubuntu-latest
 
     outputs:
-      image_uri: ${{ steps.build-image.outputs.image_uri }}
+      image_uri: ${{ steps.set-image.outputs.image_uri }}
 
     steps:
       - name: Checkout Code
@@ -27,28 +27,44 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
+      - name: Set Image URI
+        id: set-image
+        run: |
+          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}:latest
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Check if Image Exists in ECR
+        id: check-image
+        run: |
+          if aws ecr describe-images \
+            --repository-name ${{ secrets.ECR_REPO }} \
+            --image-ids imageTag=latest \
+            --region ${{ secrets.AWS_DEFAULT_REGION }} > /dev/null 2>&1
+          then
+            echo "Image exists in ECR"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Image does NOT exist"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Login to Amazon ECR
-        id: login-ecr
+        if: steps.check-image.outputs.exists == 'false'
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, Tag and Push Docker Image
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
-          IMAGE_TAG: latest
+      - name: Build and Push Docker Image
+        if: steps.check-image.outputs.exists == 'false'
         run: |
-          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}:latest
           echo "Building Docker image..."
           docker build -t $IMAGE_URI .
           echo "Pushing Docker image..."
           docker push $IMAGE_URI
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
 
 
-  # -------------------------------
+  # ==========================================
   # 🚀 CONTINUOUS DEPLOYMENT (SSH → EC2)
-  # -------------------------------
+  # ==========================================
   Continuous-Deployment:
     needs: Continuous-Integration
     runs-on: ubuntu-latest
@@ -63,45 +79,42 @@ jobs:
           port: 22
           script: |
 
-            echo "===== CHECKING AWS CLI ====="
+            echo "===== SET IMAGE URI ====="
+            IMAGE_URI="${{ needs.Continuous-Integration.outputs.image_uri }}"
+            ECR_REGISTRY=$(echo $IMAGE_URI | cut -d'/' -f1)
+
+            echo "Image URI: $IMAGE_URI"
+
+            echo "===== ENSURE AWS CLI INSTALLED ====="
             if ! command -v aws &> /dev/null
             then
-              echo "Installing AWS CLI..."
               sudo apt update
               sudo apt install unzip curl -y
               curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
               unzip -o awscliv2.zip
               sudo ./aws/install
-            else
-              echo "AWS CLI already installed"
             fi
 
-            echo "===== CHECKING DOCKER ====="
+            echo "===== ENSURE DOCKER INSTALLED ====="
             if ! command -v docker &> /dev/null
             then
-              echo "Installing Docker..."
               sudo apt install docker.io -y
               sudo systemctl start docker
               sudo systemctl enable docker
-            else
-              echo "Docker already installed"
             fi
 
-            IMAGE_URI="${{ needs.Continuous-Integration.outputs.image_uri }}"
-            ECR_REGISTRY=$(echo $IMAGE_URI | cut -d'/' -f1)
-
-            echo "===== LOGGING INTO ECR ====="
+            echo "===== LOGIN TO ECR (USING EC2 IAM ROLE) ====="
             aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | \
             docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            echo "===== PULLING LATEST IMAGE ====="
+            echo "===== PULL LATEST IMAGE ====="
             docker pull $IMAGE_URI
 
-            echo "===== STOPPING OLD CONTAINER ====="
+            echo "===== STOP OLD CONTAINER ====="
             docker stop app-container || true
             docker rm app-container || true
 
-            echo "===== RUNNING NEW CONTAINER ====="
+            echo "===== START NEW CONTAINER ====="
             docker run -d \
               --name app-container \
               -p 80:8080 \
