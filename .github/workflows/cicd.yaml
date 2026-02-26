@@ -8,13 +8,10 @@ on:
 jobs:
 
   # ==========================================
-  # 🚀 CONTINUOUS INTEGRATION (BUILD + PUSH)
+  # 🚀 CONTINUOUS INTEGRATION
   # ==========================================
   Continuous-Integration:
     runs-on: ubuntu-latest
-
-    outputs:
-      image_uri: ${{ steps.set-image.outputs.image_uri }}
 
     steps:
       - name: Checkout Code
@@ -27,13 +24,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-      - name: Set Image URI
-        id: set-image
-        run: |
-          IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}:latest
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
-
-      - name: Check if Image Exists in ECR
+      - name: Check if 'latest' image exists in ECR
         id: check-image
         run: |
           if aws ecr describe-images \
@@ -41,10 +32,10 @@ jobs:
             --image-ids imageTag=latest \
             --region ${{ secrets.AWS_DEFAULT_REGION }} > /dev/null 2>&1
           then
-            echo "Image exists in ECR"
+            echo "Image already exists."
             echo "exists=true" >> $GITHUB_OUTPUT
           else
-            echo "Image does NOT exist"
+            echo "Image does NOT exist."
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
@@ -56,14 +47,14 @@ jobs:
         if: steps.check-image.outputs.exists == 'false'
         run: |
           IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}:latest
-          echo "Building Docker image..."
+          echo "Building image: $IMAGE_URI"
           docker build -t $IMAGE_URI .
-          echo "Pushing Docker image..."
+          echo "Pushing image..."
           docker push $IMAGE_URI
 
 
   # ==========================================
-  # 🚀 CONTINUOUS DEPLOYMENT (SSH → EC2)
+  # 🚀 CONTINUOUS DEPLOYMENT
   # ==========================================
   Continuous-Deployment:
     needs: Continuous-Integration
@@ -76,38 +67,20 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: 22
           script: |
 
-            echo "===== SET IMAGE URI ====="
-            IMAGE_URI="${{ needs.Continuous-Integration.outputs.image_uri }}"
-            ECR_REGISTRY=$(echo $IMAGE_URI | cut -d'/' -f1)
+            echo "===== BUILD IMAGE URI ====="
 
-            echo "Image URI: $IMAGE_URI"
+            ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com"
+            IMAGE_URI="$ECR_REGISTRY/${{ secrets.ECR_REPO }}:latest"
 
-            echo "===== ENSURE AWS CLI INSTALLED ====="
-            if ! command -v aws &> /dev/null
-            then
-              sudo apt update
-              sudo apt install unzip curl -y
-              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-              unzip -o awscliv2.zip
-              sudo ./aws/install
-            fi
+            echo "Deploying image: $IMAGE_URI"
 
-            echo "===== ENSURE DOCKER INSTALLED ====="
-            if ! command -v docker &> /dev/null
-            then
-              sudo apt install docker.io -y
-              sudo systemctl start docker
-              sudo systemctl enable docker
-            fi
-
-            echo "===== LOGIN TO ECR (USING EC2 IAM ROLE) ====="
+            echo "===== LOGIN TO ECR USING IAM ROLE ====="
             aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | \
             docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            echo "===== PULL LATEST IMAGE ====="
+            echo "===== PULL IMAGE ====="
             docker pull $IMAGE_URI
 
             echo "===== STOP OLD CONTAINER ====="
@@ -122,5 +95,4 @@ jobs:
               -e GOOGLE_API_KEY="${{ secrets.GOOGLE_API_KEY }}" \
               $IMAGE_URI
 
-            echo "===== RUNNING CONTAINERS ====="
             docker ps
