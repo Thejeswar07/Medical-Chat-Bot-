@@ -6,4 +6,4 @@ COPY . /app
 
 RUN pip install -r requirements.txt
 
-CMD ["python3", "app.py"] #njkn
+CMD ["python3", "app.py"] 
